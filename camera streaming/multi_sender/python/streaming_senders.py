@@ -34,6 +34,10 @@ import sys
 # Global variable to handle exit
 exit_app = False
 
+DEFAULT_FPS = 15
+CAMERA_TIMEOUT_SEC = 60
+DEFAULT_RESOLUTION = sl.RESOLUTION.HD1080
+
 
 def signal_handler(signal, frame):
     """Handle Ctrl+C to properly exit the program"""
@@ -42,9 +46,12 @@ def signal_handler(signal, frame):
     print("\nCtrl+C pressed. Exiting...")
 
 
-def acquisition(zed):
+def acquisition(zed, time_profile=False):
     """Acquisition thread function to continuously grab frames"""
     infos = zed.get_camera_information()
+
+    frame_count = 0
+    start_time = time.time()
 
     while not exit_app:
         if zed.grab() <= sl.ERROR_CODE.SUCCESS:
@@ -52,7 +59,14 @@ def acquisition(zed):
             # 1. Minimize Python operations in the loop to avoid python to block the GIL
             # 2. Pre-allocate objects and arrays to reduce memory allocations
             # 3. Rely on the pyzed library which is optimized for performance
-            pass
+            if time_profile:
+                frame_count += 1
+                current_time = time.time()
+                if current_time - start_time >= 1:  # Log every second
+                    fps = frame_count / (current_time - start_time)
+                    print(f"Sender FPS (SN {infos.serial_number}): {fps:.2f}")
+                    frame_count = 0
+                    start_time = current_time
 
     print(f"{infos.camera_model}[{infos.serial_number}] QUIT")
 
@@ -62,7 +76,7 @@ def acquisition(zed):
     zed.close()
 
 
-def open_camera(zed, sn, port, camera_fps=30):
+def open_camera(zed, sn, port):
     """Open a camera with given serial number and enable streaming with given port"""
     if isinstance(zed, sl.Camera):
         init_params = sl.InitParameters()
@@ -72,9 +86,11 @@ def open_camera(zed, sn, port, camera_fps=30):
     else:
         print(f"Unsupported camera type: {type(zed)}")
         return False
-    init_params.camera_resolution = sl.RESOLUTION.AUTO
+    init_params.camera_resolution = DEFAULT_RESOLUTION
     init_params.set_from_serial_number(sn)
-    init_params.camera_fps = camera_fps
+    init_params.camera_fps = DEFAULT_FPS
+    init_params.coordinate_units = sl.UNIT.METER
+    init_params.open_timeout_sec = CAMERA_TIMEOUT_SEC
 
     # Open the camera
     open_err = zed.open(init_params)
@@ -108,6 +124,7 @@ def print_device_info(devs):
 
 def main():
     global exit_app
+    time_profile = True
 
     # Get the list of available ZED cameras
     dev_stereo_list = sl.Camera.get_device_list()
@@ -140,7 +157,7 @@ def main():
     threads = []
     for z in range(nb_cameras):
         if zeds[z].is_opened():
-            threads.append(threading.Thread(target=acquisition, args=(zeds[z],)))
+            threads.append(threading.Thread(target=acquisition, args=(zeds[z], time_profile)))
             threads[-1].start()
 
     # Set up signal handler for Ctrl+C
