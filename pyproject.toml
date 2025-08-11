@@ -1,0 +1,18 @@
+[project]
+name = "zed-sdk"
+version = "0.1.0"
+description = "ZED/CPU vision script"
+authors = [
+    {name = "brett-azalea",email = "brett@azalearobotics.com"}
+]
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "opencv-python (>=4.12.0.88,<5.0.0.0)",
+    "pyzed @ file:///home/brett/projects/zed-sdk/wheels/zed/pyzed-5.0-cp312-cp312-linux_x86_64.whl"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
