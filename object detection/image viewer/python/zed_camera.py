@@ -8,7 +8,6 @@ from azaleacontrol.perception.pick.detector import YOLODetector
 import cv2
 import time
 import uuid
-import numba
 from pathlib import Path
 from azaleacontrol.perception.common.utils import *
 
@@ -16,12 +15,11 @@ from azaleacontrol.perception.common.utils import *
 AZALEA_PARENT_DIR = pathlib.Path(__file__).parent.parent.parent.parent.parent
 
 
-DEFAULT_FPS = 15
 MAX_DEPTH_M = 100.0
+STREAM_IP = "192.168.254.10"
 CONFIDENCE_THRESHOLD = 35
 CAMERA_TIMEOUT_SEC = 60
 YOLO_DETECTOR_IMAGE_SIZE = 1280
-DEFAULT_RESOLUTION = sl.RESOLUTION.HD1080
 EXTRINSICS_CALIBRATION_FILE = (
     AZALEA_PARENT_DIR
     / "python"
@@ -29,7 +27,7 @@ EXTRINSICS_CALIBRATION_FILE = (
     / "perception"
     / "common"
     / "config"
-    / "camera_extrinsics.yaml"
+    / "camera_data.yaml"
 )
 
 
@@ -48,8 +46,12 @@ class ZedCamera:
         enable_visualization: bool = False,
         record: bool = False,
     ):
+        self.camera_data = self.fetch_camera_data()
+        self.extrinsics = self.camera_data.get("extrinsics", None)
+        self.stream_port = self.camera_data.get("port", None)
         self.init_params = sl.InitParameters()
         self.serial_num = target_serial_num
+        self.stream_ip = STREAM_IP
         self.detection_model_2d = detection_model
         if detection_model == DetectionModels.YOLO:
             path = (
@@ -69,7 +71,7 @@ class ZedCamera:
         self.belt_mask_path = (
             Path(__file__).resolve().parent
             / "belt_masks"
-            / f"belt_mask_{self.serial_num}.png"
+            / f"belt_mask_{target_serial_num}.png"
         )
         self.record = record
         if self.record:
@@ -79,6 +81,7 @@ class ZedCamera:
                 / "recordings"
                 / f"{self.serial_num}_{timestamp}.svo"
             )
+            self.record_path.parent.mkdir(parents=True, exist_ok=True)
         else:
             self.record_path = None
 
@@ -88,35 +91,55 @@ class ZedCamera:
         self.zed.close()
         print(f"Camera with serial ID {self.serial_num} closed")
 
-    def fetch_extrinsics(self):
+    def fetch_camera_data(self):
         with open(EXTRINSICS_CALIBRATION_FILE, "r") as f:
             extrinsics_data = yaml.safe_load(f)
         return extrinsics_data["extrinsics"].get(self.serial_num, None)
 
+    def print_camera_information(self, cam):
+        cam_info = cam.get_camera_information()
+        print("ZED Model                 : {0}".format(cam_info.camera_model))
+        print("ZED Serial Number         : {0}".format(cam_info.serial_number))
+        print(
+            "ZED Camera Firmware       : {0}/{1}".format(
+                cam_info.camera_configuration.firmware_version,
+                cam_info.sensors_configuration.firmware_version,
+            )
+        )
+        print(
+            "ZED Camera Resolution     : {0}x{1}".format(
+                round(cam_info.camera_configuration.resolution.width, 2),
+                cam.get_camera_information().camera_configuration.resolution.height,
+            )
+        )
+        print(
+            "ZED Camera FPS            : {0}".format(
+                int(cam_info.camera_configuration.fps)
+            )
+        )
+
     def find_and_open_camera_stream(self, enable_detection: bool) -> bool:
-        device_list = sl.Camera.get_device_list()
-        device_found = False
-        for device in device_list:
-            if device.serial_number == self.serial_num:
-                self.init_params.set_from_serial_number(device.serial_number)
-                device_found = True
-                break
-
-        if not device_found:
-            print(f"Could not find device with serial id {self.serial_num}")
+        # Retrofit to use stream IP and port number
+        if self.stream_port is None:
+            print(
+                f"Stream port not found for camera with serial number {self.serial_num}"
+            )
             return False
+        print(f"Connecting to stream at {self.stream_ip}:{self.stream_port}")
+        self.init_params.set_from_stream(self.stream_ip, self.stream_port)
 
-        self.init_params.camera_fps = DEFAULT_FPS
-        self.init_params.camera_resolution = DEFAULT_RESOLUTION
         self.init_params.depth_mode = sl.DEPTH_MODE.NEURAL_PLUS
         self.init_params.coordinate_units = sl.UNIT.METER
         self.init_params.open_timeout_sec = CAMERA_TIMEOUT_SEC
 
         self.zed = sl.Camera()
+
         err = self.zed.open(self.init_params)
         if err != sl.ERROR_CODE.SUCCESS:
-            print(f"Could not connected to camera with serial number {self.serial_num}")
+            print(f"Could not connect to stream at {self.stream_ip}:{self.stream_port}")
             return False
+
+        self.print_camera_information(self.zed)
 
         time.sleep(1)
 
@@ -125,6 +148,7 @@ class ZedCamera:
             self.record_params.compression_mode = sl.SVO_COMPRESSION_MODE.H264
             self.record_params.video_filename = str(self.record_path)
             err = self.zed.enable_recording(self.record_params)
+            print(f"Recording to {self.record_path}")
             if err != sl.ERROR_CODE.SUCCESS:
                 print(f"Error enabling recording: {err}")
                 return False
@@ -139,8 +163,11 @@ class ZedCamera:
             "cx": left_cam.cx,
             "cy": left_cam.cy,
         }
-        self.extrinsics = self.fetch_extrinsics()
+
         if self.extrinsics == None:
+            print(
+                f"No extrinsics found for camera with serial number {self.serial_num}"
+            )
             return False
 
         if enable_detection:
@@ -240,7 +267,6 @@ class ZedCamera:
             if self.zed.grab(runtime) != sl.ERROR_CODE.SUCCESS:
                 print("Error grabbing image from ZED camera")
                 continue
-            # self.zed.retrieve_objects(objects, detection_runtime_params)
             image_grabbed = True
             img_mat, depth_mat = sl.Mat(), sl.Mat()
             self.zed.retrieve_image(img_mat, sl.VIEW.LEFT)
@@ -391,7 +417,6 @@ class ZedCamera:
         return rgbd_image, detection
 
     def fetch_rgbd_image_and_detections(self) -> tuple[RGBDFrame, Detection]:
-
         (
             success,
             img_mat,
@@ -421,9 +446,13 @@ class ZedCamera:
 
 
 def main():
-    serial_num = 31141192
+    serial_num = 47093072
+    port = 30004
     zed_camera = ZedCamera(
-        target_serial_num=serial_num, enable_visualization=True, record=True
+        target_serial_num=serial_num,
+        stream_port=port,
+        enable_visualization=True,
+        record=False,
     )
     if not zed_camera.find_and_open_camera_stream(enable_detection=True):
         print("Failed to open camera stream.")
@@ -431,14 +460,9 @@ def main():
 
     while True:
         rgbd_frame, detection = zed_camera.fetch_rgbd_image_and_detections()
+
         object_mask = detection.object_mask
-
         if object_mask is not None:
-            rgb_shape = rgbd_frame.rgb_image.shape
-            print(f"RGB Image Shape: {rgb_shape}")
-            mask_shape = object_mask.shape
-            print(f"Mask Shape: {mask_shape}")
-
             # Visualize rgb, depth, and mask overlay
             if zed_camera.enable_visualization:
                 object_mask = detection.object_mask

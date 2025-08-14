@@ -20,8 +20,8 @@
 
 """
 Modified from the original sample object_detection_image_viewer.py (3D bounding boxes)
-Detect bags and draw 2D bounding boxes around them
-Inspired by zed_camera.py detection approach but minimal and standalone
+Detect bags using pure YOLOv8 segmentation and draw 2D bounding boxes around them
+Designed for ZED X One monocular camera with GMSL2 streaming
 """
 import sys
 import pyzed.sl as sl
@@ -29,19 +29,16 @@ import argparse
 import cv2
 import numpy as np
 import time
+from ultralytics import YOLO
 
 
-class DetectionModels:
-    """Detection model options inspired by zed_camera.py"""
-
-    MULTI_CLASS_BOX_ACCURATE = sl.OBJECT_DETECTION_MODEL.MULTI_CLASS_BOX_ACCURATE
-    MULTI_CLASS_BOX_FAST = sl.OBJECT_DETECTION_MODEL.MULTI_CLASS_BOX_FAST
-    MULTI_CLASS_BOX_MEDIUM = sl.OBJECT_DETECTION_MODEL.MULTI_CLASS_BOX_MEDIUM
-
-
-# Detection configuration
-DEFAULT_DETECTION_MODEL = DetectionModels.MULTI_CLASS_BOX_MEDIUM
-CONFIDENCE_THRESHOLD = 40
+# YOLO configuration for bag detection
+YOLO_MODEL_PATH = "yolov8m-seg.pt"  # Same model as ZedCamera uses
+CONFIDENCE_THRESHOLD = 0.4  # Confidence threshold (0.0 to 1.0)
+IMAGE_SIZE = 640  # YOLO inference size
+# COCO classes for bags: backpack=24, handbag=26, suitcase=28
+BAG_CLASSES = [24, 26, 28]
+COCO_CLASS_NAMES = {24: "backpack", 26: "handbag", 28: "suitcase"}
 
 
 def parse_args(init, opt):
@@ -89,89 +86,80 @@ def parse_args(init, opt):
         print("[Sample] Using default resolution")
 
 
-def draw_detections(image, objects):
+def draw_yolo_detections(image, results):
     """
-    Draw 2D bounding boxes and labels on the image
-    Enhanced version inspired by zed_camera.py bbox handling
+    Draw YOLOv8 detection results on the image
     """
     detection_count = 0
 
-    for obj in objects.object_list:
-        # Robust bbox extraction inspired by zed_camera.py
-        bbox_2d = (
-            np.array(obj.bounding_box_2d, dtype=np.float32)
-            if hasattr(obj, "bounding_box_2d") and obj.bounding_box_2d
-            else np.zeros((4, 2), dtype=np.float32)
-        )
+    if results and len(results.boxes) > 0:
+        boxes = results.boxes.cpu().numpy()
 
-        # Validate bbox shape and coordinates
-        if bbox_2d.shape == (4, 2) and np.any(bbox_2d != 0):
-            x_min, y_min = int(bbox_2d[0][0]), int(bbox_2d[0][1])
-            x_max, y_max = int(bbox_2d[2][0]), int(bbox_2d[2][1])
+        for i, box in enumerate(boxes):
+            # Get bounding box coordinates
+            x1, y1, x2, y2 = box.xyxy[0].astype(int)
+            confidence = box.conf[0]
+            class_id = int(box.cls[0])
 
-            # Ensure valid bbox coordinates
-            if x_max > x_min and y_max > y_min:
-                # Draw bounding box
-                cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+            # Get class name
+            class_name = COCO_CLASS_NAMES.get(class_id, f"class_{class_id}")
 
-                # Get label and confidence with defaults
-                label = obj.label if hasattr(obj, "label") else "BAG"
-                confidence = obj.confidence if hasattr(obj, "confidence") else 0.0
+            # Draw bounding box
+            cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-                # Draw label with confidence
-                label_text = f"{label} ({confidence:.2f})"
-                cv2.putText(
-                    image,
-                    label_text,
-                    (x_min, y_min - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
-                    2,
+            # Draw label with confidence
+            label_text = f"{class_name} ({confidence:.2f})"
+            cv2.putText(
+                image,
+                label_text,
+                (x1, y1 - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+            )
+
+            # Draw center point
+            center_x = (x1 + x2) // 2
+            center_y = (y1 + y2) // 2
+            cv2.circle(image, (center_x, center_y), 5, (0, 255, 0), -1)
+
+            detection_count += 1
+
+            # Debug info for first few detections
+            if detection_count <= 3:
+                print(
+                    f"Detection {detection_count}: {class_name} at ({x1},{y1})-({x2},{y2}), conf: {confidence:.2f}"
                 )
 
-                # Draw center point
-                center_x = (x_min + x_max) // 2
-                center_y = (y_min + y_max) // 2
-                cv2.circle(image, (center_x, center_y), 5, (0, 255, 0), -1)
-
-                detection_count += 1
-
-                # Debug info for first few detections
-                if detection_count <= 3:
-                    print(
-                        f"Detection {detection_count}: {label} at ({x_min},{y_min})-({x_max},{y_max}), conf: {confidence:.2f}"
-                    )
+        # Draw segmentation masks if available
+        # if hasattr(results, "masks") and results.masks is not None:
+        #     masks = results.masks.cpu().numpy()
+        #     for mask_data in masks:
+        #         mask = (mask_data.data[0] * 255).astype(np.uint8)
+        #         # Resize mask to image size
+        #         mask_resized = cv2.resize(mask, (image.shape[1], image.shape[0]))
+        #         # Create colored mask overlay
+        #         mask_colored = cv2.applyColorMap(mask_resized, cv2.COLORMAP_JET)
+        #         # Blend with original image
+        #         image = cv2.addWeighted(image, 0.7, mask_colored, 0.3, 0)
 
     return image, detection_count
 
 
-def setup_object_detection(zed, detection_model=DEFAULT_DETECTION_MODEL):
+def setup_yolo_detector(model_path=YOLO_MODEL_PATH):
     """
-    Setup object detection with parameters inspired by zed_camera.py
+    Setup YOLOv8 detector
     """
-    print("Setting up object detection...")
-
-    # Object detection parameters inspired by zed_camera.py
-    obj_param = sl.ObjectDetectionParameters()
-    obj_param.detection_model = detection_model
-    obj_param.enable_tracking = True  # Enable for better temporal consistency
-    obj_param.enable_segmentation = True  # Enable for better detection quality
-
-    # Enable positional tracking for object tracking
-    tracking_params = sl.PositionalTrackingParameters()
-    err = zed.enable_positional_tracking(tracking_params)
-    if err != sl.ERROR_CODE.SUCCESS:
-        print(f"Warning: Positional tracking failed: {err}")
-
-    # Enable object detection
-    err = zed.enable_object_detection(obj_param)
-    if err != sl.ERROR_CODE.SUCCESS:
-        print(f"Object Detection Enable Error: {err}")
-        return False
-
-    print("Object detection enabled successfully!")
-    return True
+    print(f"Loading YOLO model: {model_path}")
+    try:
+        model = YOLO(model_path)
+        print("YOLO model loaded successfully!")
+        return model
+    except Exception as e:
+        print(f"Error loading YOLO model: {e}")
+        print("Make sure you have ultralytics installed: pip install ultralytics")
+        return None
 
 
 def main(opt):
@@ -199,56 +187,60 @@ def main(opt):
     # Wait a bit for camera to stabilize
     time.sleep(2)
 
-    # Setup object detection with enhanced parameters
-    if not setup_object_detection(zed, DEFAULT_DETECTION_MODEL):
+    # Setup YOLO detector (no ZED SDK object detection needed!)
+    yolo_model = setup_yolo_detector()
+    if yolo_model is None:
         zed.close()
         exit(1)
 
-    # Configure object detection runtime parameters
-    obj_runtime_param = sl.ObjectDetectionRuntimeParameters()
-    obj_runtime_param.detection_confidence_threshold = CONFIDENCE_THRESHOLD
-    obj_runtime_param.object_class_filter = [sl.OBJECT_CLASS.BAG]  # Only detect Bags
-
-    # Create ZED objects filled in the main loop
-    objects = sl.Objects()
+    # Create ZED objects for image capture
     image = sl.Mat()
 
-    # Set runtime parameters
-    runtime_parameters = sl.RuntimeParameters()
-
-    print("Starting enhanced bag detection. Press 'q' to quit.")
-    print(f"Using detection model: {DEFAULT_DETECTION_MODEL}")
+    print("Starting pure YOLO bag detection. Press 'q' to quit.")
+    print(f"Using YOLO model: {YOLO_MODEL_PATH}")
     print(f"Confidence threshold: {CONFIDENCE_THRESHOLD}")
+    print(f"Target classes: {[COCO_CLASS_NAMES[c] for c in BAG_CLASSES]}")
 
     frame_count = 0
     total_detections = 0
 
     while True:
-        # Grab an image
-        grab_status = zed.grab(runtime_parameters)
+        grab_status = zed.grab()
         if grab_status == sl.ERROR_CODE.SUCCESS:
             frame_count += 1
 
             # Retrieve left image for display
-            zed.retrieve_image(image, sl.VIEW.LEFT)
-
-            # Retrieve objects
-            zed.retrieve_objects(objects, obj_runtime_param)
+            zed.retrieve_image(image)  # Changed: removed sl.VIEW.LEFT parameter
 
             # Convert ZED image to OpenCV format
             image_cv = image.get_data()
 
-            # Convert BGRA to BGR for OpenCV
+            # Convert BGRA to BGR for OpenCV and YOLO
             if image_cv.shape[2] == 4:  # BGRA
                 image_cv = cv2.cvtColor(image_cv, cv2.COLOR_BGRA2BGR)
 
-            # Draw detections on the image with enhanced detection handling
-            image_with_detections, detection_count = draw_detections(
-                image_cv.copy(), objects
-            )
-            total_detections += detection_count
+            # Run YOLO detection (filter to bag classes only)
+            try:
+                results = yolo_model.predict(
+                    image_cv,
+                    classes=BAG_CLASSES,  # Only detect bags
+                    conf=CONFIDENCE_THRESHOLD,
+                    imgsz=IMAGE_SIZE,
+                    verbose=False,
+                )[0]
 
-            # Display enhanced detection info
+                # Draw detections on the image
+                image_with_detections, detection_count = draw_yolo_detections(
+                    image_cv.copy(), results
+                )
+                total_detections += detection_count
+
+            except Exception as e:
+                print(f"YOLO detection error: {e}")
+                image_with_detections = image_cv.copy()
+                detection_count = 0
+
+            # Display detection info
             info_text = f"Bags detected: {detection_count} | Frame: {frame_count} | Total: {total_detections}"
             cv2.putText(
                 image_with_detections,
@@ -261,9 +253,7 @@ def main(opt):
             )
 
             # Add model info
-            model_text = (
-                f"Model: {DEFAULT_DETECTION_MODEL} | Threshold: {CONFIDENCE_THRESHOLD}"
-            )
+            model_text = f"YOLOv8-seg | Confidence: {CONFIDENCE_THRESHOLD}"
             cv2.putText(
                 image_with_detections,
                 model_text,
@@ -275,7 +265,7 @@ def main(opt):
             )
 
             # Show the image
-            cv2.imshow("Enhanced ZED Bag Detection", image_with_detections)
+            cv2.imshow("ZED X One - Pure YOLO Bag Detection", image_with_detections)
 
             # Check for exit condition
             key = cv2.waitKey(1) & 0xFF
@@ -289,10 +279,8 @@ def main(opt):
     cv2.destroyAllWindows()
     image.free(memory_type=sl.MEM.CPU)
 
-    # Disable modules and close camera
+    # Close camera
     print("Shutting down...")
-    zed.disable_object_detection()
-    zed.disable_positional_tracking()
     zed.close()
     print("Camera closed.")
     print(

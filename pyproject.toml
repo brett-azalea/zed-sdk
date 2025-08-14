@@ -9,7 +9,8 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "opencv-python (>=4.12.0.88,<5.0.0.0)",
-    "pyzed @ file:///home/brett/projects/zed-sdk/wheels/zed/pyzed-5.0-cp312-cp312-linux_x86_64.whl"
+    "pyzed @ file:///home/brett/projects/zed-sdk/wheels/zed/pyzed-5.0-cp312-cp312-linux_x86_64.whl",
+    "ultralytics (>=8.3.179,<9.0.0)"
 ]
 
 
