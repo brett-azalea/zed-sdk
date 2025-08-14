@@ -42,11 +42,14 @@
 /// \tparam CameraType Type of the camera (e.g., sl::Camera, sl::CameraOne)
 /// \param zed Reference to the camera object
 template <typename CameraType>
-void acquisition(CameraType& zed) {
+void acquisition(CameraType &zed)
+{
     auto infos = zed.getCameraInformation();
 
-    while (!exit_app) {
-        if (zed.grab() <= sl::ERROR_CODE::SUCCESS) {
+    while (!exit_app)
+    {
+        if (zed.grab() <= sl::ERROR_CODE::SUCCESS)
+        {
             // If needed, add more processing here
         }
     }
@@ -60,12 +63,14 @@ void acquisition(CameraType& zed) {
 }
 
 /// Function to set the depth mode in InitParameters
-inline void setDepthMode(sl::InitParameters &ip) {
+inline void setDepthMode(sl::InitParameters &ip)
+{
     ip.depth_mode = sl::DEPTH_MODE::NONE; // No depth mode for this example
 }
 
 /// Function to set the depth mode in InitParametersOne
-inline void setDepthMode(sl::InitParametersOne &ip) {
+inline void setDepthMode(sl::InitParametersOne &ip)
+{
     // NA
 }
 
@@ -76,8 +81,9 @@ inline void setDepthMode(sl::InitParametersOne &ip) {
 /// \param sn Serial number of the camera
 /// \param port Port number for streaming (default is 30000 + 2 * camera index)
 /// \param camera_fps Desired camera frame rate (default is 30)
-template<typename CameraType, typename IP>
-bool openCamera(CameraType& zed, const int sn, const int port, const int camera_fps = 30) {
+template <typename CameraType, typename IP>
+bool openCamera(CameraType &zed, const int sn, const int port, const int camera_fps = 30)
+{
 
     IP init_parameters;
     init_parameters.camera_resolution = sl::RESOLUTION::AUTO;
@@ -87,9 +93,12 @@ bool openCamera(CameraType& zed, const int sn, const int port, const int camera_
 
     // Open the camera
     const sl::ERROR_CODE open_err = zed.open(init_parameters);
-    if (open_err <= sl::ERROR_CODE::SUCCESS) {
+    if (open_err <= sl::ERROR_CODE::SUCCESS)
+    {
         std::cout << toString(zed.getCameraInformation().camera_model) << "_SN" << sn << " Opened" << std::endl;
-    } else {
+    }
+    else
+    {
         std::cout << "ZED SN:" << sn << " Error: " << open_err << std::endl;
         zed.close();
         return false;
@@ -99,9 +108,12 @@ bool openCamera(CameraType& zed, const int sn, const int port, const int camera_
     sl::StreamingParameters stream_params;
     stream_params.port = port;
     const sl::ERROR_CODE stream_err = zed.enableStreaming(stream_params);
-    if (stream_err <= sl::ERROR_CODE::SUCCESS) {
+    if (stream_err <= sl::ERROR_CODE::SUCCESS)
+    {
         std::cout << toString(zed.getCameraInformation().camera_model) << "_SN" << sn << " Enabled streaming" << std::endl;
-    } else {
+    }
+    else
+    {
         std::cout << "ZED SN:" << sn << " Streaming initialization error: " << stream_err << std::endl;
         zed.close();
         return false;
@@ -112,15 +124,17 @@ bool openCamera(CameraType& zed, const int sn, const int port, const int camera_
 }
 
 /// Function to print device information
-void printDeviceInfo(const std::vector<sl::DeviceProperties> & devs) {
+void printDeviceInfo(const std::vector<sl::DeviceProperties> &devs)
+{
     for (const auto &dev : devs)
         std::cout << "ID : " << dev.id << ", model : " << dev.camera_model
-            << " , S/N : " << dev.serial_number
-            << " , state : " << dev.camera_state
-            << std::endl;
+                  << " , S/N : " << dev.serial_number
+                  << " , state : " << dev.camera_state
+                  << std::endl;
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     // Get the list of available ZED cameras
     const std::vector<sl::DeviceProperties> dev_stereo_list = sl::Camera::getDeviceList();
     printDeviceInfo(dev_stereo_list);
@@ -134,7 +148,8 @@ int main(int argc, char **argv) {
 
     const int nb_one = dev_one_list.size();
     const int nb_stereo = dev_stereo_list.size();
-    if (nb_one + nb_stereo == 0) {
+    if (nb_one + nb_stereo == 0)
+    {
         std::cout << "No ZED Detected, exit program" << std::endl;
         return EXIT_FAILURE;
     }
@@ -143,7 +158,8 @@ int main(int argc, char **argv) {
 
     // Open the Stereo cameras
     std::vector<sl::Camera> zeds_stereo(nb_stereo);
-    for (int z = 0; z < nb_stereo; ++z) {
+    for (int z = 0; z < nb_stereo; ++z)
+    {
         const int port = 30000 + 2 * z; // Example port assignment
         zed_open |= openCamera<sl::Camera, sl::InitParameters>(zeds_stereo[z], dev_stereo_list[z].serial_number, port);
     }
@@ -151,26 +167,29 @@ int main(int argc, char **argv) {
 #ifndef _WIN32
     // Open the Mono cameras
     std::vector<sl::CameraOne> zeds_one(nb_one);
-    for (int z = 0; z < nb_one; ++z) {
+    for (int z = 0; z < nb_one; ++z)
+    {
         const int port = 30000 + 2 * (nb_stereo + z); // Example port assignment
         zed_open |= openCamera<sl::CameraOne, sl::InitParametersOne>(zeds_one[z], dev_one_list[z].serial_number, port);
     }
 #endif
 
-    if (!zed_open) {
+    if (!zed_open)
+    {
         std::cout << "No ZED opened, exit program" << std::endl;
         return EXIT_FAILURE;
     }
 
-
     // Create a grab thread for each opened camera
     std::vector<std::thread> thread_pool(nb_stereo + nb_one); // compute threads
-    for (int z = 0; z < nb_stereo; z++) {
+    for (int z = 0; z < nb_stereo; z++)
+    {
         if (zeds_stereo[z].isOpened())
             thread_pool[z] = std::thread(acquisition<sl::Camera>, std::ref(zeds_stereo[z]));
     }
 #ifndef _WIN32
-    for (int z = 0; z < nb_one; z++) {
+    for (int z = 0; z < nb_one; z++)
+    {
         if (zeds_one[z].isOpened())
             thread_pool[nb_stereo + z] = std::thread(acquisition<sl::CameraOne>, std::ref(zeds_one[z]));
     }
@@ -179,7 +198,8 @@ int main(int argc, char **argv) {
     // Ctrl+C to close
     SetCtrlHandler();
     std::cout << "Press Ctrl+C to exit" << std::endl;
-    while (!exit_app) { // main loop
+    while (!exit_app)
+    { // main loop
         sl::sleep_ms(20);
     }
 
@@ -188,12 +208,10 @@ int main(int argc, char **argv) {
     sl::sleep_ms(100);
 
     // Wait for every thread to be stopped
-    for (auto& th : thread_pool)
+    for (auto &th : thread_pool)
         if (th.joinable())
             th.join();
 
     std::cout << "Program exited" << std::endl;
     return EXIT_SUCCESS;
 }
-
-

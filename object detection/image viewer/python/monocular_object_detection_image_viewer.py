@@ -175,38 +175,24 @@ def setup_object_detection(zed, detection_model=DEFAULT_DETECTION_MODEL):
 
 
 def main(opt):
-    # Create a Camera object
-    zed = sl.Camera()
-
-    # Create a InitParameters object and set configuration parameters
-    init_params = sl.InitParameters()
+    init_params = sl.InitParametersOne()
     init_params.coordinate_units = sl.UNIT.METER
     init_params.coordinate_system = sl.COORDINATE_SYSTEM.RIGHT_HANDED_Y_UP
-
-    # For ZED Box, use ULTRA depth mode instead of NONE to avoid GMSL issues
-    # We'll just not use the depth data but keep the pipeline working
-    init_params.depth_mode = sl.DEPTH_MODE.ULTRA
-
-    # ZED Box specific settings
-    init_params.camera_fps = 15  # Conservative FPS for stability
-    init_params.sdk_verbose = 1  # Enable verbose logging for debugging
-
-    # Increase timeout for GMSL cameras
-    init_params.open_timeout_sec = 60
-
+    init_params.set_from_stream(
+        opt.ip_address.split(":")[0], int(opt.ip_address.split(":")[1])
+    )
+    init_params.camera_fps = 15
+    init_params.sdk_verbose = 1
     parse_args(init_params, opt)
+
+    zed = sl.CameraOne()
 
     print("Attempting to open ZED camera...")
     # Open the camera
     err = zed.open(init_params)
     if err != sl.ERROR_CODE.SUCCESS:
-        print(f"Camera Open Error: {err}")
-        print("Troubleshooting tips:")
-        print("1. Make sure no other processes are using the camera")
-        print("2. Try running: sudo systemctl restart nvargus-daemon")
-        print("3. Check camera connection")
-        print("4. Try rebooting the ZED Box")
-        exit(1)
+        print("Camera Open : " + repr(err) + ". Exit program.")
+        exit()
 
     print("Camera opened successfully!")
 
